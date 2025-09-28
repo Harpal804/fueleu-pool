@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuelEU Maritime Compliance Pool Management</title>
+    <link rel="stylesheet" href="src/css/styles.css">
+    <link rel="stylesheet" href="src/css/auth-styles.css">
+</head>
+
+<body>
+    <!-- Login Screen -->
+    <div id="loginScreen" class="login-container">
+        <div class="login-card">
+            <h1>⚓ FuelEU Login</h1>
+            <form onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label for="username">Username:</label>
+                    <select id="username" required onchange="updatePoolDropdown()">
+                        <option value="">Select User</option>
+                    </select>
+                </div>
+                <div class="form-group" id="poolSelectionGroup" style="display: none;">
+                    <label for="poolSelection">Select Pool:</label>
+                    <select id="poolSelection" required>
+                        <option value="">Select Pool</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" placeholder="Password" required>
+                </div>
+                <button type="submit" class="login-btn">Login</button>
+            </form>
+            <div style="margin-top: 20px; font-size: 0.9rem; color: #666;">
+                <p><strong>Demo Credentials:</strong></p>
+                <p>admin / admin123</p>
+                <p>user1 / user123</p>
+                <p>user2 / user123</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application (Dashboard will create content here) -->
+    <div id="mainApp" style="display: none;">
+        <div id="app">
+            <!-- Dashboard content will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module">
+        // Import your modules
+        import Dashboard from './src/js/dashboard.js';
+        import VesselManager from './src/js/vessel-management.js';
+        import ComplianceCalculator from './src/js/compliance-calculator.js';
+        import AuthManager from './src/js/core/authManager.js';
+
+        // Initialize auth manager
+        const authManager = new AuthManager();
+        window.authManager = authManager; // Make globally available
+
+        // Login handler
+        window.updatePoolDropdown = function () {
+            authManager.updatePoolDropdown();
+        };
+
+        window.handleLogin = function (event) {
+            event.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const selectedPool = document.getElementById('poolSelection').value;
+
+            try {
+                if (authManager.login(username, password, selectedPool)) {
+                    // Initialize main app
+                    document.getElementById('loginScreen').style.display = 'none';
+                    document.getElementById('mainApp').style.display = 'block';
+
+                    const vesselManager = new VesselManager();
+                    const calculator = new ComplianceCalculator();
+                    const dashboard = new Dashboard(vesselManager, calculator);
+
+                    dashboard.setAuthContext(authManager);
+                    dashboard.init();
+                } else {
+                    alert('Invalid credentials');
+                }
+            } catch (error) {
+                alert(error.message);
+            }
+        };
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function () {
+            authManager.init();
+        });
+    </script>
+</body>
+
+</html>
