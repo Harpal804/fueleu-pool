@@ -1658,6 +1658,6 @@ body.regular-user td.admin-only {
 }
 
 /* Debug styling to identify admin elements (remove after testing) */
-.admin-only {
+/* .admin-only {
     border: 1px dashed orange !important;
-}
+} */
