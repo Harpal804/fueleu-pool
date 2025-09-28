@@ -7,11 +7,6 @@ export default class VesselManager {
         this.vessels = [];
         this.storageKey = 'fueleu_vessels';
 
-        // Initialize the new managers
-        this.poolManager = new PoolManager();
-        this.userManager = new UserManager();
-        this.permissions = PermissionManager;
-
         console.log('🚢 VesselManager constructor called');
 
         this.loadFromStorage();
@@ -24,7 +19,17 @@ export default class VesselManager {
             console.log('✅ Sample data loaded:', this.vessels.length);
         }
 
-        // Update pool vessel counts after loading
+    }
+
+    // NEW: Method to inject shared manager instances
+    setManagers(poolManager, userManager, permissions) {
+        this.poolManager = poolManager;
+        this.userManager = userManager;
+        this.permissions = permissions;
+
+        console.log('🔗 VesselManager: Shared managers injected');
+
+        // Now update pool vessel counts
         this.updateAllPoolVesselCounts();
     }
 
@@ -141,6 +146,13 @@ export default class VesselManager {
             throw new Error('You do not have permission to create vessels');
         }
 
+        // NEW: Check if pool is read-only (admin can still add to read-only pools)
+        if (vesselData.pool && this.poolManager.isPoolReadOnly(vesselData.pool)) {
+            if (!currentUser || currentUser.role !== 'admin') {
+                throw new Error(`Cannot add vessels to read-only pool "${vesselData.pool}". Contact your administrator.`);
+            }
+        }
+
         // Enhanced validation with pool and owner requirements
         const requiredFields = ['name', 'imo', 'type', 'fuelConsumption', 'ghgIntensity'];
 
@@ -227,9 +239,27 @@ export default class VesselManager {
             throw new Error('Vessel not found');
         }
 
-        // Permission check
-        if (currentUser && !this.permissions.canDeleteVessel(currentUser)) {
-            throw new Error('You do not have permission to delete vessels');
+        // FIXED: Admin check first, then other permissions
+        const isAdmin = currentUser && currentUser.role === 'admin';
+
+        if (isAdmin) {
+            // Admin can always delete, even from read-only pools
+            console.log('Admin deleting vessel:', vessel.name);
+        } else {
+            // For non-admin users, check permissions
+            const canDelete = currentUser && (
+                this.permissions.canDeleteVessel(currentUser) || // General delete permission
+                vessel.owner === currentUser.id // User owns the vessel
+            );
+
+            if (!canDelete) {
+                throw new Error('You do not have permission to delete this vessel');
+            }
+
+            // Check if pool is read-only (for non-admin users)
+            if (this.poolManager.isPoolReadOnly(vessel.pool)) {
+                throw new Error(`Cannot delete vessels from read-only pool "${vessel.pool}". Contact your administrator.`);
+            }
         }
 
         const initialLength = this.vessels.length;
@@ -248,6 +278,7 @@ export default class VesselManager {
             this.updatePoolVesselCount(vesselPool);
         }
 
+        console.log(`Vessel "${vessel.name}" deleted by ${isAdmin ? 'admin' : 'user'}: ${currentUser?.id}`);
         return true;
     }
 
@@ -282,7 +313,15 @@ export default class VesselManager {
 
     // Pool vessel count management
     updatePoolVesselCount(poolName) {
+        if (!this.poolManager) {
+            console.warn('⚠️ PoolManager not available, skipping count update');
+            return;
+        }
+
         const vesselCount = this.getVesselsByPool(poolName).length;
+        console.log(`📊 Updating vessel count for ${poolName}: ${vesselCount} vessels`);
+
+        // Use PoolManager's safe update method
         this.poolManager.updateVesselCount(poolName, vesselCount);
     }
 
@@ -313,10 +352,24 @@ export default class VesselManager {
             throw new Error('You do not have permission to edit this vessel');
         }
 
+        // NEW: Check if current pool is read-only (admin can still edit in read-only pools)
+        if (this.poolManager.isPoolReadOnly(vessel.pool)) {
+            if (!currentUser || currentUser.role !== 'admin') {
+                throw new Error(`Cannot edit vessels in read-only pool "${vessel.pool}". Contact your administrator.`);
+            }
+        }
+
         // If pool is being changed, validate new pool
         if (updates.pool && updates.pool !== vessel.pool) {
             if (!this.poolManager.poolExists(updates.pool)) {
                 throw new Error(`Pool "${updates.pool}" does not exist`);
+            }
+
+            // NEW: Check if target pool is read-only
+            if (this.poolManager.isPoolReadOnly(updates.pool)) {
+                if (!currentUser || currentUser.role !== 'admin') {
+                    throw new Error(`Cannot move vessels to read-only pool "${updates.pool}". Contact your administrator.`);
+                }
             }
 
             // Check if current user can move vessel to new pool

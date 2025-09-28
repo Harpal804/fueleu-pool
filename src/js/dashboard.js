@@ -6,15 +6,22 @@ export default class Dashboard {
     constructor(vesselManager, complianceCalculator) {
         this.vesselManager = vesselManager;
         this.calculator = complianceCalculator;
+
+        // Create shared manager instances ONCE
         this.poolManager = new PoolManager();
         this.userManager = new UserManager();
         this.permissions = PermissionManager;
+
+        // CRITICAL FIX: Inject shared instances into VesselManager
+        this.vesselManager.setManagers(this.poolManager, this.userManager, this.permissions);
+
         this.currentYear = 2025;
         this.currentView = 'vessels';
         this.selectedVessels = new Set();
         this.authManager = null;
         this.currentPool = null; // Track currently selected pool
 
+        console.log('🎛️ Dashboard initialized with shared managers');
         window.dashboard = this;
     }
 
@@ -42,51 +49,63 @@ export default class Dashboard {
         const pools = this.poolManager.getAllPools();
 
         let html = `
-            <div class="pools-management-table">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Pool Name</th>
-                            <th>Description</th>
-                            <th>Vessels</th>
-                            <th>Manager</th>
-                            <th>Created</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
+        <div class="pools-management-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pool Name</th>
+                        <th>Description</th>
+                        <th>Vessels</th>
+                        <th>Manager</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
 
         pools.forEach(pool => {
             const vesselCount = this.vesselManager.getVesselsByPool(pool.name).length;
             const createdDate = new Date(pool.created).toLocaleDateString();
+            const isReadOnly = pool.readOnly || false;
 
             html += `
-                <tr>
-                    <td class="pool-name">${pool.name}</td>
-                    <td class="pool-description">${pool.description || 'No description'}</td>
-                    <td class="vessel-count">${vesselCount}</td>
-                    <td>${pool.manager}</td>
-                    <td>${createdDate}</td>
-                    <td class="actions-col">
-                        <div class="action-buttons">
-                            <button class="btn-icon" onclick="dashboard.editPool('${pool.name}')" title="Edit Pool">
-                                <span>✏️</span>
-                            </button>
-                            <button class="btn-icon danger" onclick="dashboard.deletePool('${pool.name}')" title="Delete Pool">
-                                <span>🗑️</span>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            `;
+            <tr class="${isReadOnly ? 'readonly-pool' : ''}">
+                <td class="pool-name">${pool.name}</td>
+                <td class="pool-description">${pool.description || 'No description'}</td>
+                <td class="vessel-count">${vesselCount}</td>
+                <td>${pool.manager}</td>
+                <td>
+                    <span class="status-badge ${isReadOnly ? 'readonly' : 'writable'}">
+                        ${isReadOnly ? '🔒 Read-Only' : '✏️ Writable'}
+                    </span>
+                </td>
+                <td>${createdDate}</td>
+                <td class="actions-col">
+                    <div class="action-buttons">
+                        <button class="btn-icon ${isReadOnly ? 'readonly' : 'writable'}" 
+                                onclick="dashboard.togglePoolReadOnly('${pool.name}')" 
+                                title="${isReadOnly ? 'Make Writable' : 'Make Read-Only'}">
+                            <span>${isReadOnly ? '🔓' : '🔒'}</span>
+                        </button>
+                        <button class="btn-icon" onclick="dashboard.editPool('${pool.name}')" title="Edit Pool">
+                            <span>✏️</span>
+                        </button>
+                        <button class="btn-icon danger" onclick="dashboard.deletePool('${pool.name}')" title="Delete Pool">
+                            <span>🗑️</span>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
         });
 
         html += `
-                    </tbody>
-                </table>
-            </div>
-        `;
+                </tbody>
+            </table>
+        </div>
+    `;
 
         container.innerHTML = html;
     }
@@ -288,9 +307,26 @@ export default class Dashboard {
         const currentUser = this.userManager.getUser(this.authManager.currentUser);
         console.log('👤 Updating interface for role:', this.authManager.userRole);
 
-        // Show/hide admin-only features (pools and user management)
+        // NEW: Add body class for CSS targeting
+        document.body.className = isAdmin ? 'admin-user' : 'regular-user';
+        console.log('🏷️ Body class set to:', document.body.className);
+
+        // Show/hide admin-only features with explicit styling
         document.querySelectorAll('.admin-only').forEach(el => {
-            el.style.display = isAdmin ? 'block' : 'none';
+            if (isAdmin) {
+                // For table cells, use table-cell, for others use block/inline-block
+                if (el.tagName.toLowerCase() === 'th' || el.tagName.toLowerCase() === 'td') {
+                    el.style.display = 'table-cell';
+                } else if (el.tagName.toLowerCase() === 'select' || el.tagName.toLowerCase() === 'input') {
+                    el.style.display = 'inline-block';
+                } else {
+                    el.style.display = 'block';
+                }
+                console.log('✅ Showing admin element:', el);
+            } else {
+                el.style.display = 'none';
+                console.log('❌ Hiding admin element:', el);
+            }
         });
 
         // Show/hide vessel creation section based on permissions
@@ -304,22 +340,25 @@ export default class Dashboard {
         this.updateUserInfoDisplay();
         this.updatePoolLists();
 
-        // Generate dynamic pool tabs
+        // Generate dynamic pool tabs with a longer delay to ensure proper rendering
         setTimeout(() => {
             this.generatePoolTabs();
 
-            // Ensure admin-only elements are properly shown/hidden after tab generation
-            const isAdmin = this.authManager.userRole === 'admin';
-            document.querySelectorAll('.admin-only').forEach(el => {
-                el.style.display = isAdmin ? 'table-cell' : 'none'; // Use table-cell for table columns
-            });
+            // Double-check admin elements after tab generation
+            setTimeout(() => {
+                if (isAdmin) {
+                    this.ensureAdminElementsVisible();
+                } else {
+                    // Ensure admin elements are hidden for users
+                    this.ensureAdminElementsHidden();
+                }
+            }, 200);
 
             // Ensure admin pools are synced on startup
             if (isAdmin) {
                 this.syncAdminPools();
             }
         }, 300);
-
     }
 
     updateUserInfoDisplay() {
@@ -1010,10 +1049,15 @@ export default class Dashboard {
         const vessel = this.vesselManager.getVessel(vesselId);
         if (!vessel) return;
 
-        // 🆕 ADD PERMISSION CHECK
         const currentUser = this.userManager.getUser(this.authManager.currentUser);
-        if (currentUser && !this.permissions.canEditVessel(currentUser, vessel)) {
-            alert('You do not have permission to edit this vessel.');
+
+        // NEW: Check if user can edit vessel in potentially read-only pool
+        if (currentUser && !this.permissions.canEditVesselInPool(currentUser, vessel, this.poolManager)) {
+            if (this.poolManager.isPoolReadOnly(vessel.pool)) {
+                alert(this.permissions.getReadOnlyMessage(vessel.pool));
+            } else {
+                alert('You do not have permission to edit this vessel.');
+            }
             return;
         }
 
@@ -1057,21 +1101,28 @@ export default class Dashboard {
         const vessel = this.vesselManager.getVessel(vesselId);
         if (!vessel) return;
 
-        // ADD PERMISSION CHECK - allow users to delete their own vessels
         const currentUser = this.userManager.getUser(this.authManager.currentUser);
-        const canDelete = currentUser && (
-            this.permissions.canDeleteVessel(currentUser) || // Admin permission
-            vessel.owner === currentUser.id // User owns the vessel
-        );
 
-        if (!canDelete) {
-            alert('You do not have permission to delete this vessel.');
-            return;
+        // FIXED: Check admin first, then read-only restrictions
+        const isAdmin = currentUser && currentUser.role === 'admin';
+
+        if (!isAdmin) {
+            // For non-admin users, check read-only restrictions first
+            if (currentUser && !this.permissions.canDeleteVesselInPool(currentUser, vessel, this.poolManager)) {
+                if (this.poolManager.isPoolReadOnly(vessel.pool)) {
+                    alert(this.permissions.getReadOnlyMessage(vessel.pool));
+                } else {
+                    alert('You do not have permission to delete this vessel.');
+                }
+                return;
+            }
         }
+        // Admin can always delete, regardless of read-only status
 
         if (confirm(`Are you sure you want to remove "${vessel.name}" from the pool?`)) {
             try {
-                this.vesselManager.removeVessel(vesselId);
+                // Pass currentUser to removeVessel method
+                this.vesselManager.removeVessel(vesselId, currentUser);
 
                 // Clean up selection state
                 this.selectedVessels.delete(vesselId);
@@ -2312,12 +2363,15 @@ export default class Dashboard {
         availablePools.forEach((pool, index) => {
             const isActive = index === 0 ? 'active' : '';
             const tabId = pool.isManagement ? 'management' : pool.name.toLowerCase().replace(/\s+/g, '-');
+            const isReadOnly = !pool.isManagement && (pool.readOnly || false);
+            const readOnlyClass = isReadOnly ? 'pool-tab-readonly' : '';
 
             tabsHTML += `
-                <div class="tab ${isActive}" onclick="dashboard.switchPoolTab('${tabId}', '${pool.name}')">
-                    ${pool.isManagement ? 'Pool & User Management' : pool.name}
-                </div>
-            `;
+            <div class="tab ${isActive} ${readOnlyClass}" onclick="dashboard.switchPoolTab('${tabId}', '${pool.name}')">
+                ${pool.isManagement ? 'Pool & User Management' : pool.name}
+                ${isReadOnly ? ' 🔒' : ''}
+            </div>
+        `;
         });
 
         tabsContainer.innerHTML = tabsHTML;
@@ -2325,7 +2379,7 @@ export default class Dashboard {
         // Generate corresponding tab content
         this.generatePoolTabContent(availablePools);
 
-        // automatically load the first tab
+        // Automatically load the first tab
         if (availablePools.length > 0) {
             const firstPool = availablePools[0];
             const firstTabId = firstPool.isManagement ? 'management' : firstPool.name.toLowerCase().replace(/\s+/g, '-');
@@ -2335,7 +2389,6 @@ export default class Dashboard {
                     this.updatePoolDisplay(firstPool.name, firstTabId);
                     this.bindPoolControls(firstTabId);
                 } else {
-                    // Load management data with longer delay to ensure DOM is ready
                     setTimeout(() => {
                         this.displayPoolManagement();
                         this.displayUserManagement();
@@ -2360,50 +2413,73 @@ export default class Dashboard {
         pools.forEach((pool, index) => {
             const isActive = index === 0 ? 'active' : '';
             const tabId = pool.isManagement ? 'management' : pool.name.toLowerCase().replace(/\s+/g, '-');
+            const isReadOnly = !pool.isManagement && (pool.readOnly || false);
+            const readOnlyModeClass = isReadOnly ? 'readonly-mode' : '';
 
             let contentHTML = '';
 
             if (pool.isManagement) {
-                // Management tab content (existing)
+                // Management tab content (existing code)
                 contentHTML = `
-                    <div id="${tabId}" class="pool-tab-content tab-content ${isActive}">
-                        <!-- System Data Management -->
-                        <div class="card">
-                            <h2>System Data Management</h2>
-                            <div class="data-management-controls">
-                                <button class="btn btn-primary" onclick="dashboard.exportAllData()" title="Download system backup">Export All Data</button>
-                                <button class="btn btn-secondary" onclick="dashboard.importAllData()" title="Restore from backup file">Import Data</button>
-                            </div>
-                            <div class="data-info">
-                                <p><strong>Export:</strong> Downloads all vessels, pools, and users as a backup file</p>
-                                <p><strong>Import:</strong> Restores data from a previously exported backup file</p>
-                                <p><em>Note: Admin settings are preserved during import</em></p>
-                            </div>
+                <div id="${tabId}" class="pool-tab-content tab-content ${isActive}">
+                    <!-- System Data Management -->
+                    <div class="card">
+                        <h2>System Data Management</h2>
+                        <div class="data-management-controls">
+                            <button class="btn btn-primary" onclick="dashboard.exportAllData()" title="Download system backup">Export All Data</button>
+                            <button class="btn btn-secondary" onclick="dashboard.importAllData()" title="Restore from backup file">Import Data</button>
                         </div>
-                        <div class="card">
-                            <h2>Pool Management</h2>
-                            <div class="pool-management-controls">
-                                <button class="btn btn-primary" onclick="dashboard.showCreatePoolModal()">Create Pool</button>
-                                <button class="btn btn-secondary" onclick="dashboard.refreshPoolList()">Refresh</button>
-                            </div>
-                            <div id="poolManagementList"></div>
-                        </div>
-                        <div class="card">
-                            <h2>User Management</h2>
-                            <div class="user-management-controls">
-                                <button class="btn btn-primary" onclick="dashboard.showCreateUserModal()">Create User</button>
-                                <button class="btn btn-secondary" onclick="dashboard.refreshUserList()">Refresh</button>
-                            </div>
-                            <div id="userManagementList"></div>
+                        <div class="data-info">
+                            <p><strong>Export:</strong> Downloads all vessels, pools, and users as a backup file</p>
+                            <p><strong>Import:</strong> Restores data from a previously exported backup file</p>
+                            <p><em>Note: Admin settings are preserved during import</em></p>
                         </div>
                     </div>
-                `;
+                    <div class="card">
+                        <h2>Pool Management</h2>
+                        <div class="pool-management-controls">
+                            <button class="btn btn-primary" onclick="dashboard.showCreatePoolModal()">Create Pool</button>
+                            <button class="btn btn-secondary" onclick="dashboard.refreshPoolList()">Refresh</button>
+                        </div>
+                        <div id="poolManagementList"></div>
+                    </div>
+                    <div class="card">
+                        <h2>User Management</h2>
+                        <div class="user-management-controls">
+                            <button class="btn btn-primary" onclick="dashboard.showCreateUserModal()">Create User</button>
+                            <button class="btn btn-secondary" onclick="dashboard.refreshUserList()">Refresh</button>
+                        </div>
+                        <div id="userManagementList"></div>
+                    </div>
+                </div>
+            `;
             } else {
-                // Pool-specific content
+                // Pool-specific content with admin-aware read-only handling
+                const isAdmin = currentUser && currentUser.role === 'admin';
+                const showReadOnlyNotice = isReadOnly && !isAdmin; // Only show notice to non-admin users
+
+                const readOnlyNotice = showReadOnlyNotice ? `
+                    <div class="card readonly-notice">
+                        <h3>🔒 Read-Only Mode</h3>
+                        <p>This pool is currently in read-only mode. Users cannot add, edit, or delete vessels. Contact your administrator to make changes.</p>
+                    </div>
+                ` : '';
+
+                // Admin gets a different notice in read-only pools
+                const adminReadOnlyNotice = isReadOnly && isAdmin ? `
+                    <div class="card admin-readonly-notice" style="background: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107;">
+                        <h3 style="color: #856404;">⚠️ Pool in Read-Only Mode</h3>
+                        <p style="color: #856404; margin: 0;">This pool is set to read-only for users. As admin, you can still make changes. Users will see restrictions.</p>
+                    </div>
+                ` : '';
+
                 contentHTML = `
                     <div id="${tabId}" class="pool-tab-content tab-content ${isActive}" data-pool="${pool.name}">
+                        ${readOnlyNotice}
+                        ${adminReadOnlyNotice}
+                        
                         <div class="pool-summary">
-                            <h2 id="poolOverviewTitle-${tabId}">${pool.name} Overview - 2025 (Target Intensity: 89.34 gCO2e/MJ)</h2>
+                            <h2 id="poolOverviewTitle-${tabId}">${pool.name} Overview - 2025 (Target Intensity: 89.34 gCO2e/MJ)${isReadOnly ? ' 🔒' : ''}</h2>
                             <div class="pool-stats">
                                 <div class="stat-card">
                                     <div class="stat-number" id="totalVessels-${tabId}">0</div>
@@ -2430,7 +2506,7 @@ export default class Dashboard {
 
                         <div class="add-vessel-section" id="addVesselSection-${tabId}">
                             <div class="card">
-                                <h2>Add New Vessel</h2>
+                                <h2>Add New Vessel${isReadOnly ? ' (Admin Override)' : ''}</h2>
                                 <div class="add-vessel-single-row-table">
                                     <table>
                                         <thead>
@@ -2446,12 +2522,8 @@ export default class Dashboard {
                                         </thead>
                                         <tbody>
                                             <tr class="add-vessel-row">
-                                                <td>
-                                                    <input type="text" id="vesselName-${tabId}" required placeholder="Enter vessel name" class="table-input">
-                                                </td>
-                                                <td>
-                                                    <input type="text" id="imoNumber-${tabId}" pattern="[0-9]{7}" required placeholder="7 digits" class="table-input">
-                                                </td>
+                                                <td><input type="text" id="vesselName-${tabId}" required placeholder="Enter vessel name" class="table-input"></td>
+                                                <td><input type="text" id="imoNumber-${tabId}" pattern="[0-9]{7}" required placeholder="7 digits" class="table-input"></td>
                                                 <td>
                                                     <select id="vesselType-${tabId}" required class="table-select">
                                                         <option value="">Select Type</option>
@@ -2469,12 +2541,8 @@ export default class Dashboard {
                                                         <option value="">Select Owner</option>
                                                     </select>
                                                 </td>
-                                                <td>
-                                                    <input type="number" id="fuelConsumption-${tabId}" min="0" required placeholder="e.g., 45,000,000" class="table-input">
-                                                </td>
-                                                <td>
-                                                    <input type="number" id="ghgIntensity-${tabId}" step="0.01" required placeholder="e.g., 89.25" class="table-input">
-                                                </td>
+                                                <td><input type="number" id="fuelConsumption-${tabId}" min="0" required placeholder="e.g., 45,000,000" class="table-input"></td>
+                                                <td><input type="number" id="ghgIntensity-${tabId}" step="0.01" required placeholder="e.g., 89.25" class="table-input"></td>
                                                 <td class="actions-col">
                                                     <div class="action-buttons">
                                                         <button type="button" class="btn-icon add" onclick="dashboard.addVesselToPool('${pool.name}', '${tabId}')" title="Add Vessel">
@@ -2515,15 +2583,9 @@ export default class Dashboard {
                                     </div>
                                     
                                     <div class="action-buttons-group">
-                                        <button class="btn btn-outline btn-sm" disabled title="Feature coming soon">Bulk Actions</button>
+                                        <button class="btn btn-outline btn-sm" ${isReadOnly && !isAdmin ? 'disabled' : ''} title="${isReadOnly && !isAdmin ? 'Read-only mode' : 'Feature coming soon'}">Bulk Actions</button>
                                         <button class="btn btn-sm" onclick="dashboard.refreshPoolData('${pool.name}')">Refresh</button>
-                                        <button class="btn btn-outline btn-sm" disabled title="Feature coming soon">Import Data</button>
-                                        <!-- <button class="btn btn-secondary btn-sm" onclick="dashboard.importVesselsFromCSV()" title="Import vessels from CSV file">
-                                            Import CSV
-                                        </button>
-                                        <button class="btn btn-outline btn-sm" onclick="dashboard.downloadCSVTemplate()" title="Download CSV template">
-                                            Template
-                                        </button> -->
+                                        <button class="btn btn-outline btn-sm" ${isReadOnly && !isAdmin ? 'disabled' : ''} title="${isReadOnly && !isAdmin ? 'Read-only mode' : 'Feature coming soon'}">Import Data</button>
                                         <button class="btn btn-secondary btn-sm" onclick="dashboard.exportPoolData('${pool.name}')">Export Data</button>
                                         <button class="btn btn-primary btn-sm" onclick="dashboard.generatePoolSummary('${pool.name}')">Pool Summary</button>
                                     </div>
@@ -2541,26 +2603,48 @@ export default class Dashboard {
         // After inserting the content, populate owner dropdowns for admin users
         if (currentUser && currentUser.role === 'admin') {
             setTimeout(() => {
+                console.log('🔧 Populating owner dropdowns for admin...');
+
                 pools.forEach(pool => {
                     if (!pool.isManagement) {
                         const tabId = pool.name.toLowerCase().replace(/\s+/g, '-');
                         const ownerSelect = document.getElementById(`vesselOwner-${tabId}`);
+
                         if (ownerSelect) {
+                            // Ensure the element is visible first
+                            ownerSelect.style.display = 'block';
+                            ownerSelect.parentElement.style.display = 'table-cell';
+
+                            // Populate the dropdown
                             const allUsers = this.userManager.getAllUsers();
                             ownerSelect.innerHTML = '<option value="">Select Owner</option>';
+
                             allUsers.forEach(user => {
                                 const option = document.createElement('option');
                                 option.value = user.id;
                                 option.textContent = user.name || user.id;
                                 ownerSelect.appendChild(option);
                             });
+
                             console.log(`Populated owner dropdown for ${tabId}:`, ownerSelect.options.length);
                         } else {
                             console.warn(`Owner select not found for ${tabId}`);
                         }
                     }
                 });
-            }, 200);
+
+                // Force visibility of all admin elements after population
+                document.querySelectorAll('.admin-only').forEach(el => {
+                    if (el.tagName.toLowerCase() === 'th' || el.tagName.toLowerCase() === 'td') {
+                        el.style.display = 'table-cell';
+                    } else {
+                        el.style.display = 'block';
+                    }
+                });
+
+                console.log('🎯 Admin interface setup complete');
+
+            }, 300); // Increased delay to ensure DOM is fully ready
         }
     }
 
@@ -2675,6 +2759,8 @@ export default class Dashboard {
         }
     }
 
+    // Update the displayPoolVessels method in your Dashboard class
+
     displayPoolVessels(vessels, tabId) {
         const container = document.getElementById(`vesselsList-${tabId}`);
         if (!container) return;
@@ -2688,27 +2774,34 @@ export default class Dashboard {
         const compliance = this.calculator.calculatePoolCompliance(vessels, this.currentYear);
         const vesselsWithCompliance = compliance.vessels;
 
+        // Check if current pool is read-only and user role
+        const activeTab = document.querySelector('.pool-tab-content.active');
+        const poolName = activeTab?.dataset.pool;
+        const isPoolReadOnly = poolName ? this.poolManager.isPoolReadOnly(poolName) : false;
+        const currentUser = this.userManager.getUser(this.authManager.currentUser);
+        const isAdmin = currentUser && currentUser.role === 'admin';
+
         let tableHtml = `
-            <div class="vessels-table">
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="select-col">
-                                <input type="checkbox" id="selectAllTable-${tabId}" onchange="dashboard.toggleSelectAll('${tabId}')">
-                            </th>
-                            <th>Vessel Name</th>
-                            <th>IMO</th>
-                            <th>Type</th>
-                            <th>Owner</th>
-                            <th>FuelEU Energy (MJ)</th>
-                            <th>Avg. GHG Intensity (gCO2eq/MJ)</th>
-                            <th>Compliance Balance (tCO2eq)</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
+        <div class="vessels-table ${isPoolReadOnly && !isAdmin ? 'readonly-pool-table' : ''}">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="select-col">
+                            <input type="checkbox" id="selectAllTable-${tabId}" onchange="dashboard.toggleSelectAll('${tabId}')" ${isPoolReadOnly && !isAdmin ? 'disabled' : ''}>
+                        </th>
+                        <th>Vessel Name</th>
+                        <th>IMO</th>
+                        <th>Type</th>
+                        <th>Owner</th>
+                        <th>FuelEU Energy (MJ)</th>
+                        <th>Avg. GHG Intensity (gCO2eq/MJ)</th>
+                        <th>Compliance Balance (tCO2eq)</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
 
         vesselsWithCompliance.forEach(vessel => {
             const isSelected = this.selectedVessels.has(vessel.id);
@@ -2716,51 +2809,57 @@ export default class Dashboard {
                 ? `${vessel.complianceBalance.toFixed(2)}`
                 : `+${vessel.complianceBalance.toFixed(2)}`;
 
+            // Check individual permissions for this vessel - admin overrides read-only
+            const canEdit = isAdmin || this.permissions.canEditVesselInPool(currentUser, vessel, this.poolManager);
+            const canDelete = isAdmin || this.permissions.canDeleteVesselInPool(currentUser, vessel, this.poolManager);
+
             tableHtml += `
-                <tr class="${isSelected ? 'selected' : ''} ${vessel.status}">
-                    <td class="select-col">
-                        <input type="checkbox" ${isSelected ? 'checked' : ''} 
-                            onchange="dashboard.toggleVesselSelection(${vessel.id})">
-                    </td>
-                    <td class="vessel-name">${vessel.name}</td>
-                    <td>${vessel.imo}</td>
-                    <td class="vessel-type">${vessel.type}</td>
-                    <td class="owner-name">${this.getUserDisplayName(vessel.owner)}</td>
-                    <td class="energy-value">${vessel.fuelConsumption.toLocaleString()}</td>
-                    <td class="ghg-value">${vessel.ghgIntensity.toFixed(2)}</td>
-                    <td class="compliance-value ${vessel.complianceBalance < 0 ? 'deficit' : 'surplus'}">${complianceBalanceText}</td>
-                    <td>
-                        <span class="status-badge ${vessel.status}">${vessel.status}</span>
-                    </td>
-                    <td class="actions-col">
-                        <div class="action-buttons">
-                            <button class="btn-icon" onclick="dashboard.viewVesselDetails(${vessel.id})" title="Details">
-                                <span>👁</span>
+            <tr class="${isSelected ? 'selected' : ''} ${vessel.status}">
+                <td class="select-col">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''} 
+                        onchange="dashboard.toggleVesselSelection(${vessel.id})"
+                        ${isPoolReadOnly && !isAdmin ? 'disabled' : ''}>
+                </td>
+                <td class="vessel-name">${vessel.name}</td>
+                <td>${vessel.imo}</td>
+                <td class="vessel-type">${vessel.type}</td>
+                <td class="owner-name">${this.getUserDisplayName(vessel.owner)}</td>
+                <td class="energy-value">${vessel.fuelConsumption.toLocaleString()}</td>
+                <td class="ghg-value">${vessel.ghgIntensity.toFixed(2)}</td>
+                <td class="compliance-value ${vessel.complianceBalance < 0 ? 'deficit' : 'surplus'}">${complianceBalanceText}</td>
+                <td>
+                    <span class="status-badge ${vessel.status}">${vessel.status}</span>
+                </td>
+                <td class="actions-col">
+                    <div class="action-buttons">
+                        <button class="btn-icon" onclick="dashboard.viewVesselDetails(${vessel.id})" title="Details">
+                            <span>👁</span>
+                        </button>
+                        ${canEdit ? `
+                            <button class="btn-icon" onclick="dashboard.editVessel(${vessel.id})" title="${isAdmin && isPoolReadOnly ? 'Edit (Admin Override)' : 'Edit'}">
+                                <span>✏️</span>
                             </button>
-                            ${this.canUserEdit(vessel) ? `
-                                <button class="btn-icon" onclick="dashboard.editVessel(${vessel.id})" title="Edit">
-                                    <span>✏️</span>
-                                </button>
-                            ` : '<span class="no-permission">Read Only</span>'}
-                            ${(() => {
-                    const currentUser = this.userManager.getUser(this.authManager.currentUser);
-                    return currentUser && (this.permissions.canDeleteVessel(currentUser) || vessel.owner === currentUser.id);
-                })() ? `
-                                <button class="btn-icon danger" onclick="dashboard.removeVessel(${vessel.id})" title="Remove">
-                                    <span>🗑️</span>
-                                </button>
-                            ` : ''}
-                        </div>
-                    </td>
-                </tr>
-            `;
+                        ` : `
+                            <span class="readonly-indicator" title="${isPoolReadOnly ? 'Read-only pool' : 'No permission'}">
+                                ${isPoolReadOnly ? '🔒' : 'Read Only'}
+                            </span>
+                        `}
+                        ${canDelete ? `
+                            <button class="btn-icon danger" onclick="dashboard.removeVessel(${vessel.id})" title="${isAdmin && isPoolReadOnly ? 'Delete (Admin Override)' : 'Remove'}">
+                                <span>🗑️</span>
+                            </button>
+                        ` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
         });
 
         tableHtml += `
-                    </tbody>
-                </table>
-            </div>
-        `;
+                </tbody>
+            </table>
+        </div>
+    `;
 
         container.innerHTML = tableHtml;
 
@@ -2774,8 +2873,13 @@ export default class Dashboard {
     addVesselToPool(poolName, tabId) {
         const currentUser = this.authManager ? this.userManager.getUser(this.authManager.currentUser) : null;
 
-        if (currentUser && !this.permissions.canCreateVessel(currentUser)) {
-            alert('You do not have permission to create vessels.');
+        // Check if user can create vessels in this pool (considering read-only status)
+        if (currentUser && !this.permissions.canCreateVesselInPool(currentUser, poolName, this.poolManager)) {
+            if (this.poolManager.isPoolReadOnly(poolName)) {
+                alert(this.permissions.getReadOnlyMessage(poolName));
+            } else {
+                alert('You do not have permission to create vessels in this pool.');
+            }
             return;
         }
 
@@ -2801,7 +2905,17 @@ export default class Dashboard {
             }
 
             if (this.editingVesselId) {
-                // Edit mode
+                // Edit mode - also check read-only permissions
+                const vessel = this.vesselManager.getVessel(this.editingVesselId);
+                if (!this.permissions.canEditVesselInPool(currentUser, vessel, this.poolManager)) {
+                    if (this.poolManager.isPoolReadOnly(vessel.pool)) {
+                        alert(this.permissions.getReadOnlyMessage(vessel.pool));
+                    } else {
+                        alert('You do not have permission to edit this vessel.');
+                    }
+                    return;
+                }
+
                 this.vesselManager.updateVessel(this.editingVesselId, vesselData, currentUser);
                 this.showNotification(`Vessel "${vesselData.name}" updated successfully!`, 'success');
                 this.exitEditMode();
@@ -3540,6 +3654,221 @@ export default class Dashboard {
         URL.revokeObjectURL(url);
 
         this.showNotification('CSV template downloaded successfully', 'success');
+    }
+
+    // NEW: Toggle pool read-only status
+    togglePoolReadOnly(poolName) {
+        const currentUser = this.userManager.getUser(this.authManager.currentUser);
+        if (!this.permissions.canSetPoolReadOnly(currentUser)) {
+            alert('You do not have permission to change pool read-only status.');
+            return;
+        }
+
+        const pool = this.poolManager.getPool(poolName);
+        if (!pool) {
+            alert('Pool not found.');
+            return;
+        }
+
+        const currentStatus = pool.readOnly || false;
+        const newStatus = !currentStatus;
+        const action = newStatus ? 'read-only' : 'writable';
+
+        if (confirm(`Are you sure you want to make pool "${poolName}" ${action}?${newStatus ? '\n\nUsers will not be able to add, edit, or delete vessels in this pool.' : '\n\nUsers will regain full access to modify vessels in this pool.'}`)) {
+            try {
+                this.poolManager.setPoolReadOnly(poolName, newStatus);
+                this.displayPoolManagement();
+
+                // Refresh pool tabs to show read-only indicators
+                setTimeout(() => {
+                    this.generatePoolTabs();
+
+                    // FIXED: Ensure admin-only elements remain visible after tab regeneration
+                    this.updateInterfaceForUser();
+
+                    // Additional fix: Force visibility of admin elements
+                    this.ensureAdminElementsVisible();
+
+                }, 100);
+
+                this.showNotification(
+                    `Pool "${poolName}" is now ${action}!`,
+                    'success'
+                );
+            } catch (error) {
+                alert(`Error changing pool status: ${error.message}`);
+            }
+        }
+    }
+
+    // NEW: Method to ensure admin elements stay visible
+    ensureAdminElementsVisible() {
+        const currentUser = this.userManager.getUser(this.authManager.currentUser);
+        if (!currentUser || currentUser.role !== 'admin') return;
+
+        console.log('🔧 Ensuring admin elements are visible...');
+
+        // Force show all admin-only elements
+        document.querySelectorAll('.admin-only').forEach(el => {
+            el.style.display = el.tagName.toLowerCase() === 'th' || el.tagName.toLowerCase() === 'td' ? 'table-cell' : 'block';
+            console.log('Admin element made visible:', el);
+        });
+
+        // Specifically ensure owner dropdowns are populated and visible
+        this.populateAllOwnerDropdowns();
+    }
+
+    // NEW: Method to populate all owner dropdowns
+    populateAllOwnerDropdowns() {
+        const currentUser = this.userManager.getUser(this.authManager.currentUser);
+        if (!currentUser || currentUser.role !== 'admin') return;
+
+        // Find all owner select elements
+        const ownerSelects = document.querySelectorAll('[id^="vesselOwner-"]');
+
+        ownerSelects.forEach(ownerSelect => {
+            if (ownerSelect) {
+                const allUsers = this.userManager.getAllUsers();
+                ownerSelect.innerHTML = '<option value="">Select Owner</option>';
+
+                allUsers.forEach(user => {
+                    const option = document.createElement('option');
+                    option.value = user.id;
+                    option.textContent = user.name || user.id;
+                    ownerSelect.appendChild(option);
+                });
+
+                // Ensure the select is visible
+                ownerSelect.style.display = 'block';
+
+                console.log(`✅ Populated owner dropdown ${ownerSelect.id}:`, ownerSelect.options.length, 'options');
+            }
+        });
+    }
+
+    // NEW: Method to ensure admin elements are hidden for users
+    ensureAdminElementsHidden() {
+        console.log('🔒 Ensuring admin elements are hidden for user...');
+
+        document.querySelectorAll('.admin-only').forEach(el => {
+            el.style.display = 'none';
+            console.log('Hidden admin element:', el);
+        });
+    }
+
+    // Debug method for troubleshooting
+    debugPermissions(vesselId) {
+        const vessel = this.vesselManager.getVessel(vesselId);
+        const currentUser = this.userManager.getUser(this.authManager.currentUser);
+
+        console.log('=== PERMISSION DEBUG ===');
+        console.log('Current User:', currentUser);
+        console.log('Vessel:', vessel);
+        console.log('Is Admin:', currentUser?.role === 'admin');
+        console.log('Pool Read-Only:', this.poolManager.isPoolReadOnly(vessel?.pool));
+        console.log('Can Delete (general):', this.permissions.canDeleteVessel(currentUser));
+        console.log('Can Delete In Pool:', this.permissions.canDeleteVesselInPool(currentUser, vessel, this.poolManager));
+        console.log('Vessel Owner:', vessel?.owner);
+        console.log('User ID:', currentUser?.id);
+        console.log('Owns Vessel:', vessel?.owner === currentUser?.id);
+        console.log('========================');
+    }
+
+    // You can call this method temporarily in the browser console:
+    // dashboard.debugPermissions(vesselId)
+
+    // Add this temporary debug method to your Dashboard class
+
+    debugAdminVisibility() {
+        console.log('=== ADMIN VISIBILITY DEBUG ===');
+        console.log('Current user role:', this.authManager?.userRole);
+        console.log('Body class:', document.body.className);
+
+        const adminElements = document.querySelectorAll('.admin-only');
+        console.log('Total admin-only elements found:', adminElements.length);
+
+        adminElements.forEach((el, index) => {
+            const computedStyle = window.getComputedStyle(el);
+            console.log(`Element ${index + 1}:`, {
+                tagName: el.tagName,
+                id: el.id,
+                className: el.className,
+                inlineDisplay: el.style.display,
+                computedDisplay: computedStyle.display,
+                visible: computedStyle.display !== 'none'
+            });
+        });
+
+        console.log('=== END DEBUG ===');
+    }
+
+    // Call this in browser console to debug: dashboard.debugAdminVisibility()
+
+    debugPoolStatus() {
+        console.log('=== POOL STATUS DEBUG ===');
+        console.log('Current user:', this.authManager?.currentUser);
+        console.log('User role:', this.authManager?.userRole);
+
+        const allPools = this.poolManager.getAllPools();
+        console.log('All pools from PoolManager:');
+        allPools.forEach(pool => {
+            console.log(`- ${pool.name}: readOnly = ${pool.readOnly}, lastUpdated = ${pool.lastUpdated}`);
+        });
+
+        // Check localStorage directly
+        const storedPools = localStorage.getItem('fueleu_pools');
+        console.log('Raw localStorage pools:', storedPools);
+
+        if (storedPools) {
+            const parsedPools = JSON.parse(storedPools);
+            console.log('Parsed localStorage pools:');
+            Object.values(parsedPools).forEach(pool => {
+                console.log(`- ${pool.name}: readOnly = ${pool.readOnly}`);
+            });
+        }
+
+        console.log('=== END POOL DEBUG ===');
+    }
+
+    debugManagerInstances() {
+        console.log('=== MANAGER INSTANCES DEBUG ===');
+        console.log('Dashboard.poolManager:', this.poolManager);
+        console.log('VesselManager.poolManager:', this.vesselManager.poolManager);
+        console.log('Are they the same object?:', this.poolManager === this.vesselManager.poolManager);
+
+        if (this.poolManager && this.vesselManager.poolManager) {
+            const dashboardPools = this.poolManager.getAllPools();
+            const vesselManagerPools = this.vesselManager.poolManager.getAllPools();
+
+            console.log('Dashboard pools count:', dashboardPools.length);
+            console.log('VesselManager pools count:', vesselManagerPools.length);
+
+            dashboardPools.forEach(pool => {
+                console.log(`Dashboard - ${pool.name}: readOnly = ${pool.readOnly}`);
+            });
+
+            vesselManagerPools.forEach(pool => {
+                console.log(`VesselManager - ${pool.name}: readOnly = ${pool.readOnly}`);
+            });
+        }
+        console.log('=== END MANAGER DEBUG ===');
+    }
+
+    testPoolLockSequence() {
+        console.log('🧪 Starting pool lock test sequence...');
+
+        // Step 1: Check initial state
+        console.log('Step 1: Initial pool state');
+        this.debugPoolStatus();
+
+        // Step 2: Lock a pool
+        console.log('Step 2: Locking Pool A');
+        this.poolManager.setPoolReadOnly('Pool A', true);
+        this.debugPoolStatus();
+
+        // Step 3: Check if VesselManager sees the same data
+        console.log('Step 3: Checking manager instances');
+        this.debugManagerInstances();
     }
 
 }

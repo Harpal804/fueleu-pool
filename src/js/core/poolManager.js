@@ -2,11 +2,25 @@ export default class PoolManager {
     constructor() {
         this.pools = {};
         this.storageKey = 'fueleu_pools';
+
+        console.log('🏊 PoolManager constructor called');
+
+        // Load existing data first
         this.loadFromStorage();
 
-        // Initialize with sample pools if empty
+        // Only initialize sample pools if NO pools exist
         if (Object.keys(this.pools).length === 0) {
+            console.log('📦 No pools found, initializing sample pools');
             this.initializeSamplePools();
+        } else {
+            console.log(`✅ Loaded ${Object.keys(this.pools).length} existing pools`);
+            // Ensure backward compatibility for readOnly property
+            this.ensureReadOnlyProperty();
+
+            // Log current pool states
+            Object.values(this.pools).forEach(pool => {
+                console.log(`  - ${pool.name}: readOnly=${pool.readOnly}, vesselCount=${pool.vesselCount}`);
+            });
         }
     }
 
@@ -39,7 +53,8 @@ export default class PoolManager {
                 description: 'ABC',
                 manager: 'admin',
                 created: new Date().toISOString(),
-                vesselCount: 0
+                vesselCount: 0,
+                readOnly: false  // NEW: Read-only flag
             },
             'Pool B': {
                 id: 'pool-b',
@@ -47,9 +62,12 @@ export default class PoolManager {
                 description: 'DEF',
                 manager: 'admin',
                 created: new Date().toISOString(),
-                vesselCount: 0
+                vesselCount: 0,
+                readOnly: false  // NEW: Read-only flag
             }
         };
+
+        console.log('📦 Sample pools initialized with readOnly=false');
         this.saveToStorage();
     }
 
@@ -71,7 +89,8 @@ export default class PoolManager {
             description: poolData.description || '',
             manager: poolData.manager || 'admin',
             created: new Date().toISOString(),
-            vesselCount: 0
+            vesselCount: 0,
+            readOnly: poolData.readOnly || false  // NEW: Default to writable
         };
 
         this.pools[poolName] = pool;
@@ -154,4 +173,76 @@ export default class PoolManager {
             );
         }
     }
+
+    // NEW: Set pool read-only status
+    setPoolReadOnly(poolName, isReadOnly) {
+        const pool = this.pools[poolName];
+        if (!pool) {
+            throw new Error('Pool not found');
+        }
+
+        pool.readOnly = isReadOnly;
+        pool.lastUpdated = new Date().toISOString();
+        this.saveToStorage();
+
+        console.log(`Pool "${poolName}" ${isReadOnly ? 'set to' : 'removed from'} read-only mode`);
+        return pool;
+    }
+
+    // NEW: Check if pool is read-only
+    isPoolReadOnly(poolName) {
+        const pool = this.pools[poolName];
+        return pool ? pool.readOnly : false;
+    }
+
+    // NEW: Get read-only pools
+    getReadOnlyPools() {
+        return Object.values(this.pools).filter(pool => pool.readOnly);
+    }
+
+    // NEW: Get writable pools
+    getWritablePools() {
+        return Object.values(this.pools).filter(pool => !pool.readOnly);
+    }
+
+    updateVesselCount(poolName, count) {
+        const pool = this.pools[poolName];
+        if (!pool) {
+            console.warn(`⚠️ Pool ${poolName} not found for vessel count update`);
+            return;
+        }
+
+        // Only update vessel count, preserve ALL other properties
+        const previousReadOnly = pool.readOnly;
+        pool.vesselCount = count;
+        pool.lastUpdated = new Date().toISOString();
+
+        // CRITICAL: Ensure readOnly status is preserved
+        if (typeof previousReadOnly !== 'undefined') {
+            pool.readOnly = previousReadOnly;
+        }
+
+        this.saveToStorage();
+
+        console.log(`✅ Pool ${poolName}: count=${count}, readOnly=${pool.readOnly} (preserved)`);
+    }
+
+    // CRITICAL: Ensure readOnly property exists on all pools
+    ensureReadOnlyProperty() {
+        let needsSave = false;
+
+        Object.values(this.pools).forEach(pool => {
+            if (!pool.hasOwnProperty('readOnly')) {
+                console.warn(`⚠️ Pool ${pool.name} missing readOnly property, adding default`);
+                pool.readOnly = false;
+                needsSave = true;
+            }
+        });
+
+        if (needsSave) {
+            console.log('💾 Saving pools with readOnly properties');
+            this.saveToStorage();
+        }
+    }
+
 }
