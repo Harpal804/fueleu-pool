@@ -156,6 +156,7 @@ $RECYCLE.BIN/
 
 # Documentation build
 /docs/_build/
+/docs
 
 # Backup files
 *.bak
